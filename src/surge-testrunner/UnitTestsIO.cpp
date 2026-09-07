@@ -2097,6 +2097,10 @@ TEST_CASE("The Window Oscillator Plays Samples", "[dsp]")
     // The window oscillator advances one frame per grain and its grain rate is the note
     // frequency, so the timing matches the wavetable oscillator: eight frames at note 60 is
     // about 1300 samples, or roughly 41 blocks per play.
+    //
+    // As in the wavetable oscillator tests, "stopped" is not "silent" - what is left after a
+    // sample finishes is the voice ringing down - so a stopped case is measured against one
+    // that is genuinely still sounding in the same window rather than against zero.
     auto energyIn = [](int voices, int extraFlags, float morph, int fromBlock, int toBlock) {
         auto surge = Surge::Headless::createSurge(44100);
         REQUIRE(surge.get());
@@ -2144,7 +2148,8 @@ TEST_CASE("The Window Oscillator Plays Samples", "[dsp]")
     SECTION("a oneshot sounds once and stops")
     {
         REQUIRE(energyIn(1, 0, 0.f, 0, 40) > 1.f);
-        REQUIRE(energyIn(1, 0, 0.f, 150, 250) < 0.01f);
+        REQUIRE(energyIn(1, 0, 0.f, 150, 250) <
+                energyIn(1, wtf_loop_sample, 0.f, 150, 250) * 0.01f);
     }
 
     SECTION("a looped sample keeps sounding")
@@ -2154,26 +2159,31 @@ TEST_CASE("The Window Oscillator Plays Samples", "[dsp]")
 
     SECTION("Morph is the start point, so a late start finishes sooner")
     {
-        // Morph at seven eighths starts on the last of the eight frames, so there is a
-        // single frame left to play and the voice is done inside half a dozen blocks
-        REQUIRE(energyIn(1, 0, 0.f, 20, 40) > 1.f);
-        REQUIRE(energyIn(1, 0, 0.875f, 20, 40) < 0.01f);
-        // ...but it does sound at the very start, so this is a start point and not silence
-        REQUIRE(energyIn(1, 0, 0.875f, 0, 4) > 0.1f);
+        // Morph at seven eighths starts on the last of the eight frames, so only one frame
+        // is left to play and the whole note carries about an eighth of the energy
+        const auto fromStart = energyIn(1, 0, 0.f, 0, 1200);
+        const auto fromLate = energyIn(1, 0, 0.875f, 0, 1200);
+
+        REQUIRE(fromStart > 1.f);
+        // It does sound, so this is a start point rather than silence
+        REQUIRE(fromLate > 0.1f);
+        REQUIRE(fromLate < fromStart * 0.25f);
     }
 
     SECTION("the play count applies here too")
     {
         REQUIRE(energyIn(4, wtf_unison_is_loop_count, 0.f, 100, 150) > 1.f);
-        REQUIRE(energyIn(4, wtf_unison_is_loop_count, 0.f, 300, 400) < 0.01f);
+        REQUIRE(energyIn(4, wtf_unison_is_loop_count, 0.f, 300, 400) <
+                energyIn(4, wtf_unison_is_loop_count | wtf_loop_sample, 0.f, 300, 400) * 0.01f);
     }
 
     SECTION("without the flag the count is unison and the sample plays once")
     {
-        // Four voices rather than four plays, so it is finished by the same point a single
-        // voice would be
         REQUIRE(energyIn(4, 0, 0.f, 0, 40) > 1.f);
-        REQUIRE(energyIn(4, 0, 0.f, 150, 250) < 0.01f);
+        // Four voices rather than four plays, so by the time four plays would still be
+        // going this has been finished for a hundred blocks
+        REQUIRE(energyIn(4, 0, 0.f, 100, 150) <
+                energyIn(4, wtf_unison_is_loop_count, 0.f, 100, 150) * 0.01f);
     }
 }
 
@@ -2229,5 +2239,38 @@ TEST_CASE("Old Window Oscillator Patches Do Not Turn Into Samples", "[io]")
 
         REQUIRE(flags & wtf_is_sample);
         REQUIRE(flags & wtf_loop_sample);
+    }
+}
+
+TEST_CASE("Sample Wavetables Get Int16 Mipmaps", "[io]")
+{
+    // MipMapWT used to leave the int16 mipmaps of a sample at zero, which was harmless while
+    // only the wavetable oscillator played samples: it reads the float tables. The window
+    // oscillator reads the int16 ones and picks its mipmap level from the read rate, so a
+    // sample went completely silent above whatever pitch first selected a level above zero.
+    Wavetable wt;
+    buildSineWT(&wt, 8, 1024);
+    REQUIRE(wt.Reslice(-1, -1, wt.flags | wtf_is_sample));
+    REQUIRE(wt.flags & wtf_is_sample);
+    REQUIRE(wt.SourceFrameCount() == 8);
+
+    for (int level = 0; level < 4; ++level)
+    {
+        const int lsize = wt.size >> level;
+        double sum = 0;
+
+        for (int frame = 0; frame < wt.SourceFrameCount(); ++frame)
+        {
+            const short *f = wt.TableI16WeakPointers[level][frame];
+            REQUIRE(f);
+
+            for (int i = 0; i < lsize; ++i)
+            {
+                sum += fabs((double)f[i + FIRoffsetI16]);
+            }
+        }
+
+        INFO("int16 mipmap level " << level);
+        REQUIRE(sum > 0);
     }
 }
