@@ -100,11 +100,8 @@ class WavetableOscillator : public AbstractBlitOscillator
     int nointerp;
     float FMmul_inv;
     // Play count for sample-mode playback, per voice, counted down each time the sample
-    // wraps. wtf_loop_sample means "never stop" and is represented by the sentinel below:
-    // at that value the countdown is skipped entirely. The sentinel sits above MAX_UNISON
-    // deliberately, so that when wtf_unison_is_loop_count makes the unison voice count
-    // double as the play count, the whole 1..MAX_UNISON range stays a literal play count.
-    static constexpr int infinite_sampleloop = MAX_UNISON + 1;
+    // wraps. wtf_loop_sample means "never stop" and pins this to the shared
+    // Surge::Oscillator::infinite_sampleloop sentinel, at which the countdown is skipped.
     int sampleloop[MAX_UNISON];
 
     pdata *unmodulatedLocalcopy;

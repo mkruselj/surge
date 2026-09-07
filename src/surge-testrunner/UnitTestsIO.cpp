@@ -32,6 +32,7 @@
 #include "UnitTestUtilities.h"
 #include "WavetableScriptEvaluator.h"
 #include "dsp/oscillators/WavetableOscillator.h"
+#include "dsp/oscillators/WindowOscillator.h"
 #include "PatchFileHeaderStructs.h"
 #include "sst/basic-blocks/mechanics/endian-ops.h"
 
@@ -1432,6 +1433,30 @@ namespace
 {
 // A wavetable with entirely distinct, never-zero samples, so a re-slice can be checked for
 // exact content preservation and the trailing-silence trim has nothing to latch on to.
+// save_patch stamps the current ff_revision into the patch XML. Rewriting it in place is what
+// puts the loader onto a given migration path. Both numbers have to be the same width so that
+// the xml size recorded in the patch header stays correct, which is checked here.
+bool rewritePatchRevision(void *data, size_t sz, int to)
+{
+    const std::string from = "revision=\"" + std::to_string(ff_revision) + "\"";
+    const std::string want = "revision=\"" + std::to_string(to) + "\"";
+
+    REQUIRE(from.size() == want.size());
+
+    char *p = (char *)data;
+
+    for (size_t i = 0; i + from.size() <= sz; ++i)
+    {
+        if (memcmp(p + i, from.c_str(), from.size()) == 0)
+        {
+            memcpy(p + i, want.c_str(), want.size());
+            return true;
+        }
+    }
+
+    return false;
+}
+
 void buildRampWT(Wavetable *wt, int frames, int frameSize)
 {
     std::vector<float> data((size_t)frames * frameSize);
@@ -1920,29 +1945,6 @@ TEST_CASE("The Sample Unison Mode Flag Round Trips", "[io]")
 
 TEST_CASE("Old Patches Keep Reading Unison Voices As A Sample Play Count", "[io]")
 {
-    // save_patch stamps the current ff_revision into the patch XML. Rewriting it in place is
-    // what puts the loader on the pre-flag migration path; both numbers are the same width,
-    // so the xml size recorded in the patch header stays correct.
-    auto downgradeRevision = [](void *data, size_t sz) {
-        const std::string from = "revision=\"" + std::to_string(ff_revision) + "\"";
-        const std::string to = "revision=\"30\"";
-
-        REQUIRE(from.size() == to.size());
-
-        char *p = (char *)data;
-
-        for (size_t i = 0; i + from.size() <= sz; ++i)
-        {
-            if (memcmp(p + i, from.c_str(), from.size()) == 0)
-            {
-                memcpy(p + i, to.c_str(), to.size());
-                return true;
-            }
-        }
-
-        return false;
-    };
-
     auto roundTripAsOldPatch = [&](int oscType, int extraFlags, int unisonVoices) {
         auto surge = Surge::Headless::createSurge(44100);
         REQUIRE(surge.get());
@@ -1957,7 +1959,7 @@ TEST_CASE("Old Patches Keep Reading Unison Voices As A Sample Play Count", "[io]
         void *data = nullptr;
         auto sz = surge->storage.getPatch().save_patch(&data);
         REQUIRE(sz > 0);
-        REQUIRE(downgradeRevision(data, sz));
+        REQUIRE(rewritePatchRevision(data, sz, 30));
 
         surge->storage.getPatch().load_patch(data, sz, false);
 
@@ -2087,5 +2089,145 @@ TEST_CASE("Sample Play Count Covers The Whole Unison Range", "[dsp]")
         // Nine voices, but nine voices - so it is finished long before nine plays would be
         REQUIRE(energyIn(9, 0, 0, 40) > 1.f);
         REQUIRE(energyIn(9, 0, 150, 250) < energyIn(9, wtf_unison_is_loop_count, 150, 250) * 0.01f);
+    }
+}
+
+TEST_CASE("The Window Oscillator Plays Samples", "[dsp]")
+{
+    // The window oscillator advances one frame per grain and its grain rate is the note
+    // frequency, so the timing matches the wavetable oscillator: eight frames at note 60 is
+    // about 1300 samples, or roughly 41 blocks per play.
+    auto energyIn = [](int voices, int extraFlags, float morph, int fromBlock, int toBlock) {
+        auto surge = Surge::Headless::createSurge(44100);
+        REQUIRE(surge.get());
+
+        auto *osc = &(surge->storage.getPatch().scene[0].osc[0]);
+        osc->queue_type = ot_window;
+
+        // Let the type switch land first: it re-runs init_ctrltypes and init_default_values,
+        // which would wipe anything set before it
+        for (int i = 0; i < 5; ++i)
+            surge->process();
+
+        auto &wt = osc->wt;
+        buildSineWT(&wt, 8, 1024);
+        REQUIRE(wt.Reslice(-1, -1, wt.flags | wtf_is_sample | extraFlags));
+        REQUIRE(wt.SourceFrameCount() == 8);
+
+        osc->p[WindowOscillator::win_morph].val.f = morph;
+        osc->p[WindowOscillator::win_unison_voices].val.i = voices;
+
+        // Morph is read through the scene data rather than off the parameter, so it needs a
+        // block to get there before the note starts. The voice count is read directly and
+        // does not, but this costs nothing.
+        for (int i = 0; i < 2; ++i)
+            surge->process();
+
+        surge->playNote(0, 60, 127, 0);
+
+        float e = 0;
+
+        for (int q = 0; q < 1200; ++q)
+        {
+            surge->process();
+
+            if (q >= fromBlock && q < toBlock)
+            {
+                for (int s = 0; s < BLOCK_SIZE; ++s)
+                    e += fabs(surge->output[0][s]);
+            }
+        }
+
+        return e;
+    };
+
+    SECTION("a oneshot sounds once and stops")
+    {
+        REQUIRE(energyIn(1, 0, 0.f, 0, 40) > 1.f);
+        REQUIRE(energyIn(1, 0, 0.f, 150, 250) < 0.01f);
+    }
+
+    SECTION("a looped sample keeps sounding")
+    {
+        REQUIRE(energyIn(1, wtf_loop_sample, 0.f, 1100, 1200) > 1.f);
+    }
+
+    SECTION("Morph is the start point, so a late start finishes sooner")
+    {
+        // Morph at seven eighths starts on the last of the eight frames, so there is a
+        // single frame left to play and the voice is done inside half a dozen blocks
+        REQUIRE(energyIn(1, 0, 0.f, 20, 40) > 1.f);
+        REQUIRE(energyIn(1, 0, 0.875f, 20, 40) < 0.01f);
+        // ...but it does sound at the very start, so this is a start point and not silence
+        REQUIRE(energyIn(1, 0, 0.875f, 0, 4) > 0.1f);
+    }
+
+    SECTION("the play count applies here too")
+    {
+        REQUIRE(energyIn(4, wtf_unison_is_loop_count, 0.f, 100, 150) > 1.f);
+        REQUIRE(energyIn(4, wtf_unison_is_loop_count, 0.f, 300, 400) < 0.01f);
+    }
+
+    SECTION("without the flag the count is unison and the sample plays once")
+    {
+        // Four voices rather than four plays, so it is finished by the same point a single
+        // voice would be
+        REQUIRE(energyIn(4, 0, 0.f, 0, 40) > 1.f);
+        REQUIRE(energyIn(4, 0, 0.f, 150, 250) < 0.01f);
+    }
+}
+
+TEST_CASE("Old Window Oscillator Patches Do Not Turn Into Samples", "[io]")
+{
+    auto roundTripAtRevision = [](int oscType, int revision) {
+        auto surge = Surge::Headless::createSurge(44100);
+        REQUIRE(surge.get());
+
+        auto *osc = &(surge->storage.getPatch().scene[0].osc[0]);
+        osc->type.val.i = oscType;
+
+        buildRampWT(&osc->wt, 8, 64);
+        REQUIRE(osc->wt.Reslice(-1, -1, osc->wt.flags | wtf_is_sample | wtf_loop_sample));
+
+        void *data = nullptr;
+        auto sz = surge->storage.getPatch().save_patch(&data);
+        REQUIRE(sz > 0);
+
+        if (revision != ff_revision)
+        {
+            REQUIRE(rewritePatchRevision(data, sz, revision));
+        }
+
+        surge->storage.getPatch().load_patch(data, sz, false);
+
+        return surge->storage.getPatch().scene[0].osc[0].wt.flags;
+    };
+
+    SECTION("a pre-feature window oscillator patch has the sample flags cleared")
+    {
+        // These patches were being scanned by Morph as ordinary wavetables, because the
+        // window oscillator ignored the flag. Honouring it now would turn them into
+        // oneshots, so it goes.
+        const auto flags = roundTripAtRevision(ot_window, 30);
+
+        REQUIRE(!(flags & wtf_is_sample));
+        REQUIRE(!(flags & wtf_loop_sample));
+        REQUIRE(!(flags & wtf_unison_is_loop_count));
+    }
+
+    SECTION("a current revision window oscillator patch keeps them")
+    {
+        const auto flags = roundTripAtRevision(ot_window, ff_revision);
+
+        REQUIRE(flags & wtf_is_sample);
+        REQUIRE(flags & wtf_loop_sample);
+    }
+
+    SECTION("the wavetable oscillator is not caught by the window migration")
+    {
+        const auto flags = roundTripAtRevision(ot_wavetable, 30);
+
+        REQUIRE(flags & wtf_is_sample);
+        REQUIRE(flags & wtf_loop_sample);
     }
 }

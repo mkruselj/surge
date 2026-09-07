@@ -739,10 +739,10 @@ void OscillatorWaveformDisplay::createWTShapeMenu(juce::PopupMenu &contextMenu)
     const int frames = wt.SourceFrameCount();
     const int totalSamples = frames * wt.size;
 
-    // The window oscillator shares the wavetable but ignores wtf_is_sample entirely, so
-    // oneshot playback is only offered where it does something. Frame size and frame count
-    // still are, since the window oscillator reads both.
-    if (oscdata->type.val.i == ot_wavetable)
+    // Both wavetable-data oscillators play samples, so the playback section is offered on
+    // both and reads identically. Frame size and frame count are below, outside this, since
+    // they apply in wavetable playback too.
+    if (oscdata->type.val.i == ot_wavetable || oscdata->type.val.i == ot_window)
     {
         Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(contextMenu, "PLAYBACK");
 

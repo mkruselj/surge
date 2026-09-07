@@ -88,7 +88,7 @@ void WavetableOscillator::init(float pitch, bool is_display, bool nonzero_init_d
         // sample ignores it entirely
         if (oscdata->wt.flags & wtf_loop_sample)
         {
-            playcount = infinite_sampleloop;
+            playcount = Surge::Oscillator::infinite_sampleloop;
         }
     }
 
@@ -340,7 +340,7 @@ void WavetableOscillator::convolute(int voice, bool FM, bool stereo)
             tableid[voice]++;
             if (tableid[voice] > (int)oscdata->wt.n_tables - paddingLoop)
             {
-                if (sampleloop[voice] < infinite_sampleloop)
+                if (sampleloop[voice] < Surge::Oscillator::infinite_sampleloop)
                     sampleloop[voice]--;
 
                 if (sampleloop[voice] > 0)

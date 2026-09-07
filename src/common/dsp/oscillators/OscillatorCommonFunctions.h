@@ -46,6 +46,14 @@ template <typename valtype> using UnisonSetup = sst::basic_blocks::dsp::UnisonSe
  * read the oscillator's wavetable flags directly. They are shared rather than duplicated per
  * oscillator because the two behave identically here; the instances live in Oscillator.cpp.
  */
+/*
+ * Sample play count sentinel meaning "never stop", shared by the two oscillators that play
+ * wavetable data as samples. It sits above MAX_UNISON deliberately, so that when
+ * wtf_unison_is_loop_count makes the unison voice count double as the play count, the whole
+ * 1 to MAX_UNISON range stays a literal number of plays with no value doing double duty.
+ */
+static constexpr int infinite_sampleloop = MAX_UNISON + 1;
+
 struct SampleUnisonDynamicName : public ParameterDynamicNameFunction
 {
     const char *getName(const Parameter *p) const override;
