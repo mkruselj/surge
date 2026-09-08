@@ -217,6 +217,10 @@ class SurgeSynthesizer:
         """
         Save the current state of Surge XT to an .fxp file.
         """
+    def seedRNG(self, seed: int) -> None:
+        """
+        Seed the random sources this instance drives, making renders reproducible. Call before playing notes. Intended for offline and test use.
+        """
     def setModDepth01(self, targetParameter: SurgePyNamedParam, modulationSource: SurgePyModSource, depth: float, scene: int = 0, index: int = 0) -> None:
         """
         Set a modulation to a given depth

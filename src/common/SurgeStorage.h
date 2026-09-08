@@ -48,6 +48,7 @@
 #include <type_traits>
 #include <random>
 #include <chrono>
+#include <cstdlib>
 #include <array>
 
 #include "Tunings.h"
@@ -2156,12 +2157,33 @@ class alignas(16) SurgeStorage
         runningOnAudioThread();
         return rngGen.z1(rngGen.g);
     }
-// void seed_rand(int s) { rngGen.g.seed(s); }
+    /*
+     * Seed every random source this storage drives, so that a render can be made
+     * reproducible. This is intended for offline and test use - measuring patch
+     * loudness, golden-value tests, and anything else where run-to-run variation
+     * in unison spread, oscillator start phase, noise or sample and hold would
+     * otherwise show up as noise in the result.
+     *
+     * Note that std::srand() is process global rather than per storage instance.
+     * That is deliberate: AliasOscillator and SampleAndHoldOscillator seed
+     * themselves from std::rand() rather than from here, so covering them means
+     * touching the global. Moving those two to this RNG would be tidier, but it
+     * is a DSP change rather than a test hook, so it is left alone.
+     *
+     * Do not call this from the audio thread on a live instance.
+     */
+    void seed_rand(int s)
+    {
+        rngGen.g.seed(s);
+        noiseRng.reseed(s);
+        std::srand(s);
+    }
 #else
     inline int rand() { return std::rand(); }
     inline uint32_t rand_u32() { return (uint32_t)(rand_01() * (float)(0xFFFFFFFF)); }
     inline float rand_pm1() { return rand_01() * 2 - 1; }
     inline float rand_01() { return (float)std::rand() / (float)(RAND_MAX); }
+    void seed_rand(int s) { std::srand(s); }
 #endif
     float db_to_linear(float);
     float lookup_waveshape(sst::waveshapers::WaveshaperType, float);

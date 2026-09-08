@@ -1035,6 +1035,8 @@ class SurgeSynthesizerWithPythonExtensions : public SurgeSynthesizer
     void setMPEEnabled(bool m) { storage.mpeEnabled = m; }
 
     bool getMPEEnabled() const { return storage.mpeEnabled; }
+
+    void seedRNG(int s) { storage.seed_rand(s); }
 };
 
 SurgeSynthesizer *createSurge(float sr)
@@ -1197,6 +1199,10 @@ PYBIND11_MODULE(surgepy, m)
         .def("remapToStandardKeyboard",
              &SurgeSynthesizerWithPythonExtensions::remapToStandardKeyboard,
              "Return to standard C-centered keyboard mapping")
+        .def("seedRNG", &SurgeSynthesizerWithPythonExtensions::seedRNG,
+             "Seed the random sources this instance drives, making renders reproducible. "
+             "Call before playing notes. Intended for offline and test use.",
+             py::arg("seed"))
         .def_property("mpeEnabled", &SurgeSynthesizerWithPythonExtensions::getMPEEnabled,
                       &SurgeSynthesizerWithPythonExtensions::setMPEEnabled)
         .def_property("tuningApplicationMode",
