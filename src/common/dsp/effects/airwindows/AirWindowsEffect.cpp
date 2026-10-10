@@ -55,17 +55,17 @@ AirWindowsEffect::AirWindowsEffect(SurgeStorage *storage, FxStorage *fxdata, pda
 
 AirWindowsEffect::~AirWindowsEffect()
 {
-    /*
-     * The parameter formatters we hand out as user data are members of this object, so nothing
-     * may still be pointing at them once we are gone. loadFx unpublishes them before it deletes
-     * us as well, but keeping the invariant with the object rather than only with one of its
-     * callers means no future delete path can reopen the window. See #6619.
-     */
+    // Only our own formatters: in Surge FX a replacement effect publishes onto this same
+    // fxdata before we are destroyed, and clearing blindly would wipe its user data. See #6619
     if (fxdata)
     {
-        for (int i = 0; i < n_fx_params; ++i)
+        for (int i = 0; i < n_fx_params - 1; ++i)
         {
-            fxdata->p[i].clear_user_data();
+            if (fxFormatters[i] &&
+                fxdata->p[i + 1].user_data == static_cast<ParamUserData *>(fxFormatters[i].get()))
+            {
+                fxdata->p[i + 1].clear_user_data();
+            }
         }
     }
 }
@@ -89,9 +89,8 @@ const char *AirWindowsEffect::group_label(int id)
     {
         if (airwin)
         {
-            // This used to be a function local static, so two effect instances - or two
-            // plugin instances - asking for their group label at once scribbled over each
-            // other's answer.
+            // per instance, since a shared buffer gets scribbled on by a second effect or a
+            // second plugin instance asking for its label at the same time
             strncpy(groupLabel, mapper.nameAtStreamedIndex(fxdata->p[0].val.i).c_str(),
                     sizeof(groupLabel) - 1);
             return (const char *)groupLabel;
@@ -303,19 +302,16 @@ void AirWindowsEffect::process(float *dataL, float *dataR)
 
 void AirWindowsEffect::setupSubFX(int sfx, bool useStreamedValues)
 {
-    // sfx comes off a parameter the UI and the host can both be writing, so bound it the same
-    // way the selector mapper does rather than indexing the registry with it raw. See #6619.
+    // Write the bounded index back: lastSelected below is compared against p[0].val.i
+    // every block, so leaving an out of range value there rebuilds us forever
     sfx = mapper.safeIdx(sfx);
+    fxdata->p[0].val.i = sfx;
 
     const auto &r = fxreg()[sfx];
     const bool detailedMode = Surge::Storage::getValueDisplayIsHighPrecision(storage);
     int dp = detailedMode ? 6 : 2;
 
-    /*
-     * The parameter formatters read through to airwin, so unpublish them before the instance
-     * they are about to reach through goes away. resetCtrlTypes republishes them below, once
-     * the new instance is in place. See #6619.
-     */
+    // the formatters read through to airwin, so unpublish before replacing it
     for (int i = 1; i < n_fx_params; ++i)
     {
         fxdata->p[i].clear_user_data();

@@ -586,13 +586,10 @@ void Parameter::set_user_data(ParamUserData *ud)
 void Parameter::set_type(int ctrltype)
 {
     /*
-     * Unpublish first, publish last. Every switch below reads the ctrltype argument, not the
-     * member, so this->ctrltype is assigned at the very end of this function, once the ranges
-     * and display info it describes are actually in place. The UI thread and the host read
-     * these members off a live parameter without synchronization, so a reader which catches us
-     * mid-flight now sees the old type with the old handlers rather than the new type paired
-     * with stale ranges - the latter is how an out of range index reaches a discrete index
-     * remapper. See #6619.
+     * Unpublish first, publish last: this->ctrltype is assigned at the end of this function so
+     * an unsynchronized reader sees the old type with its own handlers rather than the new type
+     * paired with ranges that have not been written yet. Every switch below reads the argument,
+     * not the member. See #6619
      */
     user_data = nullptr;
     basicBlocksParamMetaData = nullptr;
@@ -3936,12 +3933,6 @@ std::string Parameter::get_display(bool external, float ef) const
                     {
                         using sst::filters::FilterType;
 
-                        /*
-                         * We are reading another parameter's value here, and on the UI thread
-                         * or the host's thread that read can catch a patch change mid-flight,
-                         * so bound it before indexing. Same for a negative i, which the
-                         * subcount test on its own lets straight through. See #6619.
-                         */
                         int type = limit_range(patch.scene[scene].filterunit[unit].type.val.i, 0,
                                                (int)sst::filters::num_filter_types - 1);
                         const auto fType = (FilterType)type;

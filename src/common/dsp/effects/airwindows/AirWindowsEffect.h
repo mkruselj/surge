@@ -81,13 +81,6 @@ class alignas(16) AirWindowsEffect : public Effect
         }
     }
 
-    /*
-     * The registries are immutable once built, but they used to be static members filled
-     * lazily by whichever constructor ran first. The UI thread can construct a throwaway effect
-     * onto fxsync at the same moment the audio thread constructs the real one, so that fill
-     * raced a reader of the very vector these names are read out of. Function local statics
-     * initialize exactly once and every reader synchronizes with that. See #6619.
-     */
     static const std::vector<AirWinBaseClass::Registration> &fxreg();
     static const std::vector<int> &fxregOrdering();
 

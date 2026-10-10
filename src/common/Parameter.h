@@ -470,23 +470,9 @@ class Parameter
         Special,
     };
 
-    /*
-     * This used to be a std::optional held by value, and a ParamMetaData owns an
-     * unordered_map and a pile of strings. set_type resetting it therefore freed that map while
-     * the UI thread or the host was partway through reading a display out of it, which is a use
-     * after free rather than merely a torn read - see #6619, where it is by far the most
-     * frequent crash in a patch-change soak.
-     *
-     * The metadata is a pure function of the effect type and the parameter index, so it now
-     * lives in an immortal per-effect-type table and parameters only point at it. Clearing the
-     * pointer unpublishes without destroying anything, so a reader which has already loaded it
-     * stays valid. Read it into a local before testing it, since it can be cleared underneath
-     * you between the test and the use.
-     *
-     * Note the load is still not synchronized, exactly like user_data next to it. What changed
-     * is that it can no longer point at freed memory. As a bonus, Parameter is cheap to copy
-     * again, which matters because loadFx copies whole parameters on the audio thread.
-     */
+    // Borrowed from a table owned per effect type, never held by value, so clearing it cannot
+    // free anything a reader is inside. Load it into a local before testing it: set_type can
+    // clear it between the test and the use. See #6619
     const sst::basic_blocks::params::ParamMetaData *basicBlocksParamMetaData{nullptr};
 
     void get_display_of_modulation_depth(char *txt, float modulationDepth, bool isBipolar,
@@ -619,12 +605,8 @@ class Parameter
     // I take a shallow copy and don't assume ownership and assume I am referenceable
     void set_user_data(ParamUserData *ud);
 
-    /*
-     * Since I don't own my user data, whoever does has to unpublish it here before it goes
-     * away. The UI thread and the host both read user_data off a live parameter (to format a
-     * display, to build a menu), so a pointer which outlives its owner is a use after free.
-     * See #6619.
-     */
+    // Whoever owns the user data must unpublish it here before it goes away, since the UI
+    // thread and the host both read it off a live parameter. See #6619
     void clear_user_data() { user_data = nullptr; }
 
     bool supportsDynamicName() const;
@@ -652,15 +634,8 @@ class Parameter
      * with the somewhat odd 99 and 005 but put them all in one place and used the
      * consistently.
      */
-    /*
-     * The subtractions below are done in int64 and the narrowing result is bounded, because
-     * vmax and vmin can be read while the audio thread is rewriting them - at which point they
-     * are float bits reinterpreted as ints, their difference overflows a signed int, and
-     * converting the resulting enormous double back to int is undefined. For every parameter
-     * range Surge actually uses, none of the bounds bind and this is bit identical to what it
-     * replaced, which matters because the constants here are load bearing for saved automation.
-     * See #6619.
-     */
+    // int64 subtraction and a bounded narrowing, because a torn read of vmax/vmin is float
+    // bits read as ints: the difference overflows and the narrowing is then undefined. See #6619
     static inline float intScaledToFloat(int v, int vmax, int vmin = 0)
     {
         return 0.005 + 0.99 * ((float)((int64_t)v - vmin)) / ((float)((int64_t)vmax - vmin));
