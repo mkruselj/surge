@@ -81,6 +81,15 @@ class SurgeSynthEditor : public juce::AudioProcessorEditor,
 
     void setVKBLayout(const std::string layout);
 
+    // True whenever the VKB is shown and no text or code editor has the keys for itself.
+    bool vkbShouldTakeKeys() const;
+    void updateVKBFromKeyState();
+
+    bool vkbMenuWasActive{false};
+    // Sampled when a menu opens: whether the keys were ours to read at that moment.
+    bool vkbMenuOwnedKeys{false};
+    bool vkbWasTakingKeys{false};
+
     void reapplySurgeComponentColours();
 
     struct IdleTimer : juce::Timer
@@ -192,6 +201,10 @@ struct SurgeVirtualKeyboard : public juce::MidiKeyboardComponent
     }
 
     ~SurgeVirtualKeyboard();
+
+    // MidiKeyboardComponent only releases held keys from focusLost, which never fires for us
+    // since we take no keyboard focus, so we have to ask for the reset ourselves.
+    void releaseAllHeldKeys() { resetAnyKeysInUse(); }
 
     std::function<void(float)> onVelocityChanged;
 
