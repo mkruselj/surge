@@ -38,6 +38,17 @@ extern "C"
 
 #include <pffft.h>
 }
+
+/*
+ * LUA_OK is a Lua 5.2 addition which LuaJIT backports into its own lua.h, but
+ * which stock Lua 5.1.5 does not define. It is the only C API difference the two
+ * backends present to Surge, so cover it here rather than patching the vendored
+ * sources or every comparison site.
+ */
+#ifndef LUA_OK
+#define LUA_OK 0
+#endif
+
 #else
 typedef int lua_State;
 #endif
